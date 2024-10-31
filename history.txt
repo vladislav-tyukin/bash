@@ -1,0 +1,25 @@
+ls
+date
+ды
+ls
+date
+ls
+datet
+cd ..
+ls
+date
+claer
+clear
+ls
+date
+ls
+date >> text5.txt
+cat text5.txt
+nano text5.txt
+ls
+date
+lss
+date
+cd ..
+ls
+cd ..
