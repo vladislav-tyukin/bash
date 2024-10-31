@@ -110,7 +110,7 @@ bolee nizkiy vishe, bolee visokiy nizhee
 "" ''
 <, >, <<, >>
 |
-&&, ||
+&&, ||f
 ;
 &
 */
