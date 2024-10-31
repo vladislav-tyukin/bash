@@ -10,69 +10,116 @@
 #include <signal.h>
 
 
+//sudo apt install libreadline-devС
+//cc bashworked.c -lreadline -lhistory
 #include <readline/readline.h>
 #include <readline/history.h>
 
 #define BUF_MAX 256
 
-
-
-
 enum Type{
     LOGIC /* && ; ||*/, OPERATION /*date/ls*/, REDIRECT, PIPE
 };
 
-typedef struct Job{
+typedef struct job {
     pid_t pid;
-    pid_t pgid;
     char* command;
-    struct Job* next;
-}Job;
+    struct job* next;
+} job;
 
-Job* jobs = NULL;
-
-void add_job(pid_t pid, pid_t pgid, const char* command) {
-    Job* new_job = (Job*)malloc(sizeof(Job));
-    new_job->pid = pid;
-    new_job->pgid = pgid;
-    new_job->command = strdup(command);
-    new_job->next = jobs;
-    jobs = new_job;
+job* create_job(pid_t pid, const char* command){
+    job* tmp = malloc(sizeof(job));
+    tmp -> pid = pid;
+    tmp -> command = malloc(strlen(command) + 1);
+    strcpy(tmp->command, command);
+    tmp->next = NULL;
+    return tmp;
 }
-void dell_job(pid_t pid) {
-    Job* current = jobs;
-    Job* prev = NULL;
 
-    while (current != NULL) {
-        if (current->pid == pid) {
-            if (prev == NULL) {
-                jobs = current->next;
-            } else {
-                prev->next = current->next;
-            }
-            free(current->command);
-            free(current);
-            return;
-        }
-        prev = current;
-        current = current->next;
+int push_job(job* jobs, pid_t pid, const char* command){
+    job* tmp = create_job(pid, command);
+    while(jobs -> next != NULL){
+        jobs = jobs -> next;
     }
+    jobs -> next = tmp;
+    return 0;
 }
 
-void print_jobs() {
-    Job* current = jobs;
+job* jobs = NULL;
+
+int delete_job(job** jobs, pid_t pid){
+    job* head = *jobs;
+    job* tmp = * jobs;
+    job* prev = *jobs;
+    while (tmp->pid != pid){
+        prev = tmp;
+        tmp = tmp -> next;
+    } if (tmp == head){
+        *jobs = head -> next;
+        return 0;
+    }
+    prev -> next = tmp -> next;
+    free(tmp);
+    return 0;
+}
+
+void print_jobs(job* jobs) {
     printf("PID\tPGID\tCOMMAND\n");
-    while (current != NULL) {
-        printf("%d\t%d\t%s\n", current->pid, current->pgid, current->command);
-        current = current->next;
+    while (jobs != NULL) {
+        printf("%d\t%s\n", jobs->pid, jobs->command);
+        jobs = jobs->next;
     }
 }
 
-void kill_process(pid_t pid, int signal){
-    if(kill(pid, signal) == -1){
-        perror("kill process error");
+
+
+
+void handle_signal(int sig) {
+    if (sig == SIGINT) {
+        printf("\n ignore SIGINT (Ctrl+C)\n");
+    } else if (sig == SIGTSTP) {
+        printf("\nignore SIGTSTP (Ctrl+Z)\n");
+    } else if (sig == SIGQUIT) {
+        printf("\nignore SIGQUIT (Ctrl+\\)\n");
+    }
+    fflush(stdout);
+}
+
+void setup_signal_handlers() {
+    struct sigaction sa;
+    
+    sa.sa_handler = handle_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction SIGINT");
+        exit(EXIT_FAILURE);
+    }
+    if (sigaction(SIGTSTP, &sa, NULL) == -1) {
+        perror("sigaction SIGTSTP");
+        exit(EXIT_FAILURE);
+    }
+    if (sigaction(SIGQUIT, &sa, NULL) == -1) {
+        perror("sigaction SIGQUIT");
+        exit(EXIT_FAILURE);
     }
 }
+
+void reset_signal_handlers() {
+    struct sigaction sa;
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTSTP, &sa, NULL);
+    sigaction(SIGQUIT, &sa, NULL);
+}
+
+
+
+
 
 
 typedef struct node{
@@ -271,7 +318,8 @@ int execute_command(node* root) {
     }
 
     if(strcmp(args[0], "ps") == 0){
-        print_jobs();
+        print_jobs(jobs);
+        return 0;
         
     }
      
@@ -295,11 +343,14 @@ int execute_command(node* root) {
         pid_t pid = fork();
         if (pid == 0) { //docherniy
 
+            reset_signal_handlers();
             execvp(args[0], args);
             perror("execvp execute command error");
             exit(EXIT_FAILURE);
         } else { // parent
+            push_job(jobs, pid, args[0]);
             waitpid(pid, &status, 0);
+            delete_job(&jobs, pid);
             if(WIFEXITED(status)){
                 return WEXITSTATUS(status);
             } else {
@@ -387,11 +438,6 @@ int execute_tree(node* root) {
         execute_pipe(root);
     }
 }
-
-
-pid_t current_pid = -1;
-
-
 
 
 
@@ -545,6 +591,8 @@ void free_tree(node* root) {
 
 int main() {
     read_history("history.txt");
+    jobs = create_job(getpid(), "bash");
+    setup_signal_handlers();
 
     while (1) {
         char cwd[PATH_MAX];
@@ -555,7 +603,7 @@ int main() {
             continue; 
         }
         char* input = readline("> ");
-        if (input == NULL) {
+        if (input == NULL){
             break; 
         }
         if (*input) {
