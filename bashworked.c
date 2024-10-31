@@ -64,7 +64,7 @@ int delete_job(job** jobs, pid_t pid){
 }
 
 void print_jobs(job* jobs) {
-    printf("PID\tPGID\tCOMMAND\n");
+    printf("PID\tCOMMAND\n");
     while (jobs != NULL) {
         printf("%d\t%s\n", jobs->pid, jobs->command);
         jobs = jobs->next;
@@ -74,13 +74,32 @@ void print_jobs(job* jobs) {
 
 
 
+void print_prompt() {
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        write(STDOUT_FILENO, "\033[01;35mshell: \033[0m\033[01;37m", 27);
+        write(STDOUT_FILENO, cwd, strlen(cwd));
+        write(STDOUT_FILENO, "\033[0m$ ", 6);
+        printf(">");
+    } else {
+        perror("getcwd() error");
+    }
+    fflush(stdout);  // Очищаем буфер для немедленного вывода
+}   
+
+
+
+
 void handle_signal(int sig) {
     if (sig == SIGINT) {
         printf("\n ignore SIGINT (Ctrl+C)\n");
+        print_prompt();
     } else if (sig == SIGTSTP) {
         printf("\nignore SIGTSTP (Ctrl+Z)\n");
+        print_prompt();
     } else if (sig == SIGQUIT) {
         printf("\nignore SIGQUIT (Ctrl+\\)\n");
+        print_prompt();
     }
     fflush(stdout);
 }
@@ -339,21 +358,21 @@ int execute_command(node* root) {
         }
 
 
-        int status;
-        pid_t pid = fork();
-        if (pid == 0) { //docherniy
+    int status;
+    pid_t pid = fork();
+    if (pid == 0) { //docherniy
 
-            reset_signal_handlers();
-            execvp(args[0], args);
-            perror("execvp execute command error");
-            exit(EXIT_FAILURE);
-        } else { // parent
-            push_job(jobs, pid, args[0]);
-            waitpid(pid, &status, 0);
-            delete_job(&jobs, pid);
-            if(WIFEXITED(status)){
-                return WEXITSTATUS(status);
-            } else {
+        reset_signal_handlers();
+        execvp(args[0], args);
+        perror("execvp execute command error");
+        exit(EXIT_FAILURE);
+    } else { // parent
+        push_job(jobs, pid, args[0]);
+        waitpid(pid, &status, 0);
+            
+        if(WIFEXITED(status)){
+            return WEXITSTATUS(status);
+        } else {
                 return -1;
             }
         }
