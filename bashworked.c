@@ -18,7 +18,7 @@
 #define BUF_MAX 256
 
 enum Type{
-    LOGIC /* && ; ||*/, OPERATION /*date/ls*/, REDIRECT, PIPE
+    LOGIC /* && ; ||*/, OPERATION /*date/ls*/, REDIRECT, PIPE, BACKGROUND
 };
 
 typedef struct job {
@@ -84,7 +84,7 @@ void print_prompt() {
     } else {
         perror("getcwd() error");
     }
-    fflush(stdout);  // Очищаем буфер для немедленного вывода
+    fflush(stdout);  
 }   
 
 
@@ -103,6 +103,12 @@ void handle_signal(int sig) {
     }
     fflush(stdout);
 }
+
+
+void handle_sigchld(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
 
 void setup_signal_handlers() {
     struct sigaction sa;
@@ -123,7 +129,11 @@ void setup_signal_handlers() {
         perror("sigaction SIGQUIT");
         exit(EXIT_FAILURE);
     }
+     sa.sa_handler = handle_sigchld;
+    sigaction(SIGCHLD, &sa, NULL);
 }
+
+
 
 void reset_signal_handlers() {
     struct sigaction sa;
@@ -193,7 +203,7 @@ node* parse_background_expr(int* i, char** tokens) {
     node* left = parse_sequence_expr(i, tokens);
     if (tokens[*i] != NULL && strcmp(tokens[*i], "&") == 0) {
         (*i)++;
-        left = create_node(LOGIC, "&", NULL, left, parse_background_expr(i, tokens));
+        left = create_node(BACKGROUND, "&", NULL, left, parse_background_expr(i, tokens));
     }
     return left;
 }
@@ -368,14 +378,20 @@ int execute_command(node* root) {
         exit(EXIT_FAILURE);
     } else { // parent
         push_job(jobs, pid, args[0]);
-        waitpid(pid, &status, 0);
+        
+        if(root->type != BACKGROUND){
+            waitpid(pid, &status, 0);
+            delete_job(&jobs, pid);
             
-        if(WIFEXITED(status)){
-            return WEXITSTATUS(status);
+            if(WIFEXITED(status)){
+                return WEXITSTATUS(status);
         } else {
                 return -1;
             }
         }
+        return 0;
+    }
+    
     } else if (root->type == REDIRECT) {
         int fd;
         if (strcmp(root->op, ">") == 0) {
@@ -431,6 +447,21 @@ int execute_command(node* root) {
 int execute_tree(node* root) {
     if (root == NULL) return 0;
 
+    if(root->type == BACKGROUND){
+        pid_t pid = fork();
+        if(pid == 0){
+            execute_tree(root->left);
+            exit(0);
+        } else if(pid > 0){
+            push_job(jobs, pid, root->left->command);
+            return 0;
+        } else {
+            perror("fork error in execute tree for background");
+            return -1;
+        }
+        
+    }
+
     if (root->type == LOGIC) {
     int left_stat = execute_tree(root->left);
         if (!strcmp(root->op, "&&")) {
@@ -462,28 +493,23 @@ int execute_tree(node* root) {
 
 
 
-
-
-
 int is_single_operator(char c) {
-    return c == '&' || c == '|' || c == ';' || c == '>' || c == '<' || c == '_';
+    return c == '|' || c == '&' || c == ';' || c == '>' || c == '<';
 }
-
 
 int is_double_operator(const char *s, int i) {
-    return (s[i] == '&' && s[i+1] == '&') ||
-           (s[i] == '|' && s[i+1] == '|') ||
-           (s[i] == '>' && s[i+1] == '>') ||
+    return (s[i] == '&' && s[i+1] == '&') || 
+           (s[i] == '|' && s[i+1] == '|') || 
+           (s[i] == '>' && s[i+1] == '>') || 
            (s[i] == '<' && s[i+1] == '<');
 }
-
 
 char** split_bash(const char* s) {
     int tmp_size = BUF_MAX, tmp_i = 0;
     char* tmp = malloc(tmp_size);
     char** array = NULL;
     int array_i = 0;
-    int in_quotes = 0;  
+    int in_quotes = 0;
     int length = strlen(s);
 
     for (int i = 0; i < length; i++) {
@@ -492,8 +518,8 @@ char** split_bash(const char* s) {
             if (tmp_i > 0) {
                 tmp[tmp_i] = '\0';
                 array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-                array[array_i] = (char*)malloc(strlen(tmp) + 1);
-                strcpy(array[array_i++], tmp);
+                array[array_i] = strdup(tmp);
+                array_i++;
                 tmp_i = 0;
             }
             continue;
@@ -501,20 +527,17 @@ char** split_bash(const char* s) {
 
         // обработка кавычек
         if (s[i] == '\'' || s[i] == '"') {
-            if (in_quotes == 0) {
-                in_quotes = s[i];  // открываем кавычки
-            } else if (in_quotes == s[i]) {
-                in_quotes = 0;  // закрываем кавычки
-            }
+            in_quotes = in_quotes == 0 ? s[i] : 0;
             continue;
         }
 
-        if (!in_quotes && is_double_operator(s, i)) {
+        // обработка двойных операторов
+        if (!in_quotes && (s[i] == '&' && s[i+1] == '&' || s[i] == '|' && s[i+1] == '|' || s[i] == '>' && s[i+1] == '>' || s[i] == '<' && s[i+1] == '<')) {
             if (tmp_i > 0) {
                 tmp[tmp_i] = '\0';
                 array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-                array[array_i] = (char*)malloc(strlen(tmp) + 1);
-                strcpy(array[array_i++], tmp);
+                array[array_i] = strdup(tmp);
+                array_i++;
                 tmp_i = 0;
             }
             tmp[0] = s[i];
@@ -522,24 +545,25 @@ char** split_bash(const char* s) {
             tmp[2] = '\0';
             i++;  // пропускаем второй символ оператора
             array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-            array[array_i] = (char*)malloc(strlen(tmp) + 1);
-            strcpy(array[array_i++], tmp);
+            array[array_i] = strdup(tmp);
+            array_i++;
             continue;
         }
 
-        if (!in_quotes && is_single_operator(s[i])) {
+        // обработка одиночных операторов
+        if (!in_quotes && (s[i] == '|' || s[i] == '&' || s[i] == ';' || s[i] == '>' || s[i] == '<')) {
             if (tmp_i > 0) {
                 tmp[tmp_i] = '\0';
                 array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-                array[array_i] = (char*)malloc(strlen(tmp) + 1);
-                strcpy(array[array_i++], tmp);
+                array[array_i] = strdup(tmp);
+                array_i++;
                 tmp_i = 0;
             }
             tmp[0] = s[i];
             tmp[1] = '\0';
             array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-            array[array_i] = (char*)malloc(strlen(tmp) + 1);
-            strcpy(array[array_i++], tmp);
+            array[array_i] = strdup(tmp);
+            array_i++;
             continue;
         }
 
@@ -553,8 +577,8 @@ char** split_bash(const char* s) {
     if (tmp_i > 0) {
         tmp[tmp_i] = '\0';
         array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
-        array[array_i] = (char*)malloc(strlen(tmp) + 1);
-        strcpy(array[array_i++], tmp);
+        array[array_i] = strdup(tmp);
+        array_i++;
     }
 
     array = (char**)realloc(array, (array_i + 1) * sizeof(char*));
@@ -562,6 +586,7 @@ char** split_bash(const char* s) {
     free(tmp);
     return array;
 }
+
 
 char* readline_input() {
     int n = BUF_MAX, i = 0, c;
@@ -612,6 +637,7 @@ int main() {
     read_history("history.txt");
     jobs = create_job(getpid(), "bash");
     setup_signal_handlers();
+    signal(SIGCHLD, handle_sigchld);
 
     while (1) {
         char cwd[PATH_MAX];
