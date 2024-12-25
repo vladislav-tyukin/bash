@@ -18,7 +18,11 @@
 #define BUF_MAX 256
 
 enum Type{
-    LOGIC /* && ; ||*/, OPERATION /*date/ls*/, REDIRECT, PIPE, BACKGROUND
+    LOGIC /* && ; ||*/, OPERATION /*date/ls*/, REDIRECT, PIPE
+};
+
+enum ExecutionType{
+    FOREGROUND, BACKGROUND
 };
 
 typedef struct job {
@@ -27,50 +31,73 @@ typedef struct job {
     struct job* next;
 } job;
 
-job* create_job(pid_t pid, const char* command){
-    job* tmp = malloc(sizeof(job));
-    tmp -> pid = pid;
-    tmp -> command = malloc(strlen(command) + 1);
-    strcpy(tmp->command, command);
-    tmp->next = NULL;
-    return tmp;
+
+job* create_job(pid_t pid, const char* command) {
+    job* new_job = (job*)malloc(sizeof(job));
+    if (new_job == NULL) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE); 
+    }
+    new_job->pid = pid;
+    new_job->command = strdup(command);
+    new_job->next = NULL;
+    return new_job;
 }
 
-int push_job(job* jobs, pid_t pid, const char* command){
-    job* tmp = create_job(pid, command);
-    while(jobs -> next != NULL){
-        jobs = jobs -> next;
+int push_job(job** jobs, pid_t pid, const char* command) {
+    job* tmp = create_job(pid, command); 
+    if (*jobs == NULL) {
+        *jobs = tmp;  
+    } else {
+        job* current = *jobs;
+        while (current->next != NULL) {
+            current = current->next; 
+        }
+        current->next = tmp;
     }
-    jobs -> next = tmp;
     return 0;
 }
 
+
 job* jobs = NULL;
 
-int delete_job(job** jobs, pid_t pid){
-    job* head = *jobs;
-    job* tmp = * jobs;
-    job* prev = *jobs;
-    while (tmp->pid != pid){
-        prev = tmp;
-        tmp = tmp -> next;
-    } if (tmp == head){
-        *jobs = head -> next;
-        return 0;
+int delete_job(job** jobs, pid_t pid) {
+    if (*jobs == NULL) {
+        return -1;  
     }
-    prev -> next = tmp -> next;
+
+    job* head = *jobs;
+    job* tmp = *jobs;
+    job* prev = NULL;
+
+    
+    while (tmp != NULL && tmp->pid != pid) {
+        prev = tmp;
+        tmp = tmp->next;
+    }
+
+    if (tmp == NULL) {
+        return -1;
+    }
+
+    if (tmp == head) {
+        *jobs = head->next;
+    } else {
+        prev->next = tmp->next;
+    }
+
     free(tmp);
     return 0;
 }
 
-void print_jobs(job* jobs) {
-    printf("PID\tCOMMAND\n");
-    while (jobs != NULL) {
-        printf("%d\t%s\n", jobs->pid, jobs->command);
-        jobs = jobs->next;
-    }
+void print_jobs(job* jobs){
+  printf("PID | NAME \n");
+  while (jobs != NULL){
+    printf("%d | %s \n", jobs->pid, jobs -> command);
+    jobs = jobs -> next;
+  }
+  return;
 }
-
 
 
 
@@ -93,13 +120,13 @@ void print_prompt() {
 void handle_signal(int sig) {
     if (sig == SIGINT) {
         printf("\n ignore SIGINT (Ctrl+C)\n");
-        print_prompt();
+       
     } else if (sig == SIGTSTP) {
         printf("\nignore SIGTSTP (Ctrl+Z)\n");
-        print_prompt();
+        
     } else if (sig == SIGQUIT) {
         printf("\nignore SIGQUIT (Ctrl+\\)\n");
-        print_prompt();
+       
     }
     fflush(stdout);
 }
@@ -153,15 +180,17 @@ void reset_signal_handlers() {
 
 typedef struct node{
     enum Type type;
+    enum ExecutionType execution;
     char* op;
     char* command;
     struct node* left;
     struct node* right;
 }node;
 
-node* create_node(enum Type type, const char* op, const char* command, node* left, node* right){
+node* create_node(enum Type type, enum ExecutionType execution, const char* op, const char* command, node* left, node* right){
     node* tmp = (node*)malloc(sizeof(node));
     tmp -> type = type;
+    tmp -> execution = execution;
     tmp -> op = op ? strdup(op) : NULL;
     tmp -> command = command ? strdup(command) : NULL;
     tmp -> left = left;
@@ -191,7 +220,7 @@ bolee nizkiy vishe, bolee visokiy nizhee
 &
 */
 
-node* parse_background_expr(int* i, char** tokens);
+
 node* parse_sequence_expr(int* i, char** tokens);
 node* parse_or_expr(int* i, char** tokens);
 node* parse_and_expr(int* i, char** tokens);
@@ -199,21 +228,12 @@ node* parse_pipe_expr(int* i, char** tokens);
 node* parse_redirect_expr(int* i, char** tokens);
 node* parse_command_expr(int* i, char** tokens);
 
-node* parse_background_expr(int* i, char** tokens) {
-    node* left = parse_sequence_expr(i, tokens);
-    if (tokens[*i] != NULL && strcmp(tokens[*i], "&") == 0) {
-        (*i)++;
-        left = create_node(BACKGROUND, "&", NULL, left, parse_background_expr(i, tokens));
-    }
-    return left;
-}
-
 node* parse_sequence_expr(int* i, char** tokens) {
     node* left = parse_or_expr(i, tokens);
     while (tokens[*i] != NULL && strcmp(tokens[*i], ";") == 0) {
         (*i)++;
         node* right = parse_sequence_expr(i, tokens);
-        left = create_node(LOGIC, ";", NULL, left, right);
+        left = create_node(LOGIC, FOREGROUND, ";", NULL, left, right);
     }
     return left;
 }
@@ -223,7 +243,7 @@ node* parse_or_expr(int* i, char** tokens) {
     while (tokens[*i] != NULL && strcmp(tokens[*i], "||") == 0) {
         (*i)++;
         node* right = parse_or_expr(i, tokens);
-        left = create_node(LOGIC, "||", NULL, left, right);
+        left = create_node(LOGIC, FOREGROUND, "||", NULL, left, right);
     }
     return left;
 }
@@ -233,7 +253,7 @@ node* parse_and_expr(int* i, char** tokens) {
     while (tokens[*i] != NULL && strcmp(tokens[*i], "&&") == 0) {
         (*i)++;
         node* right = parse_and_expr(i, tokens);
-        left = create_node(LOGIC, "&&", NULL, left, right);
+        left = create_node(LOGIC, FOREGROUND, "&&", NULL, left, right);
     }
     return left;
 }
@@ -244,7 +264,7 @@ node* parse_pipe_expr(int* i, char** tokens) {
         char* op = strdup(tokens[*i]);
         (*i)++;
         node* right = parse_redirect_expr(i, tokens);
-        left = create_node(PIPE, op, NULL, left, right);
+        left = create_node(PIPE, FOREGROUND, op, NULL, left, right);
     }
     return left;
 }
@@ -258,19 +278,18 @@ node* parse_redirect_expr(int *i, char** tokens) {
     while (tokens[*i] != NULL && is_redirect(tokens[*i])) {
         char* op = strdup(tokens[*i]);
         (*i)++;
-        node* right = parse_command_expr(i, tokens); 
-        left = create_node(REDIRECT, op, NULL, left, right);
+        node* right = parse_command_expr(i, tokens);
+        left = create_node(REDIRECT, FOREGROUND, op, NULL, left, right);
     }
     return left;
 }
-
 
 node* parse_command_expr(int* i, char** tokens) {
     if (tokens[*i] == NULL) return NULL;
     char* command = strdup(tokens[*i]);
     (*i)++;
     
-    while (tokens[*i] != NULL && tokens[*i][0] != '&' && tokens[*i][0] != '|' && //объединяем все команды
+    while (tokens[*i] != NULL && tokens[*i][0] != '&' && tokens[*i][0] != '|' &&
            tokens[*i][0] != ';' && !is_redirect(tokens[*i])) {
         command = realloc(command, strlen(command) + strlen(tokens[*i]) + 2);
         strcat(command, " ");
@@ -278,13 +297,22 @@ node* parse_command_expr(int* i, char** tokens) {
         (*i)++;
     }
 
-    node* command_node = create_node(OPERATION, NULL, command, NULL, NULL);
+    node* command_node = create_node(OPERATION, FOREGROUND, NULL, command, NULL, NULL);
+
+   
+    if (tokens[*i] != NULL && !strcmp(tokens[*i], "&")) {
+        command_node-> execution = BACKGROUND;
+        (*i)++;
+    }
+
     return command_node;
 }
 
+
+
 node* parse(char** tokens) {
     int i = 0;
-    return parse_background_expr(&i, tokens);
+    return parse_sequence_expr(&i, tokens);
 }
 
 
@@ -327,8 +355,12 @@ int execute_pipe(node* root){
       }
 }
 
+
 int execute_command(node* root) {
-    if (root == NULL) return 0;
+    if (root == NULL) {
+        fprintf(stderr, "Ошибка: root равен NULL\n");
+        return -1;
+    }
 
     if (root->type == OPERATION) {
         char* args[BUF_MAX];
@@ -340,146 +372,105 @@ int execute_command(node* root) {
         }
         args[index] = NULL;
 
-    if ((strcmp(args[0], "exit") == 0) || (strcmp(args[0], "q") == 0)){
-        printf("ending bash-on-c... \n");
-        exit(1);
+        if ((strcmp(args[0], "exit") == 0) || (strcmp(args[0], "q") == 0)) {
+            printf("end bash-on-c...\n");
+            exit(0);
+        }
 
-    }
-
-    if(strcmp(args[0], "ps") == 0){
-        print_jobs(jobs);
-        return 0;
-        
-    }
-     
-
-    if (strcmp(args[0], "cd") == 0) {
-            const char* path;
-            if (args[1] == NULL) {
-                path = getenv("HOME");
-            } else {
-                
-                path = args[1];
-            }
+        if (strcmp(args[0], "cd") == 0) {
+            const char* path = args[1] ? args[1] : getenv("HOME");
             if (chdir(path) != 0) {
-                perror("cd execute command error");
-            } 
+                perror("error cd");
+            }
             return 0;
         }
-
-
-    int status;
-    pid_t pid = fork();
-    if (pid == 0) { //docherniy
-
-        reset_signal_handlers();
-        execvp(args[0], args);
-        perror("execvp execute command error");
-        exit(EXIT_FAILURE);
-    } else { // parent
-        push_job(jobs, pid, args[0]);
         
-        if(root->type != BACKGROUND){
-            waitpid(pid, &status, 0);
-            delete_job(&jobs, pid);
-            
-            if(WIFEXITED(status)){
-                return WEXITSTATUS(status);
-        } else {
+        if(strcmp(args[0], "ps") == 0){
+            print_jobs(jobs);
+            return 0; 
+        }
+
+        if (strcmp(args[0], "kill") == 0) {
+            if (args[1] == NULL) {
+                fprintf(stderr, "ошибка: укажите PID для команды kill\n");
                 return -1;
             }
+                pid_t pid = atoi(args[1]);
+                kill(pid, SIGKILL);
+                delete_job(&jobs, pid);
+                return 0;
         }
-        return 0;
+
+        
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (root->execution == BACKGROUND) {
+                int dev_null = open("/dev/null", O_RDWR);
+                if (dev_null >= 0) {
+                    dup2(dev_null, STDIN_FILENO);
+                    dup2(dev_null, STDOUT_FILENO);
+                    dup2(dev_null, STDERR_FILENO);
+                    close(dev_null);
+                }
+            }
+            reset_signal_handlers();
+            execvp(args[0], args);
+            perror("Ошибка execvp");
+            exit(EXIT_FAILURE);
+        } else if (pid < 0) {
+            perror("Ошибка fork");
+            return -1;
+        } else {
+            if (root->execution == BACKGROUND) {
+                push_job(&jobs, pid, root->command);
+            } else {
+                int status;
+                waitpid(pid, &status, 0);
+                if (WIFEXITED(status)) {
+                    return WEXITSTATUS(status);
+                } else {
+                    return -1;
+                }
+            }
+        }
     }
-    
-    } else if (root->type == REDIRECT) {
-        int fd;
-        if (strcmp(root->op, ">") == 0) {
-            fd = open(root->right->command, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd == -1) {
-                perror("open for writing execute command error");
-                
-            }
-            if (fork() == 0) {
-                dup2(fd, STDOUT_FILENO);
-                close(fd);
-                execute_command(root->left);
-                exit(1);
-            } else {
-                wait(NULL);
-                close(fd);
-            }
-        } else if (strcmp(root->op, ">>") == 0) {
-            fd = open(root->right->command, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd == -1) {
-                perror("open for adding execute command error");
-                
-            }
-            if (fork() == 0) {
-                dup2(fd, STDOUT_FILENO);
-                close(fd);
-                execute_command(root->left);
-                exit(1);
-            } else {
-                wait(NULL);
-                close(fd);
-            }
-        } else if (strcmp(root->op, "<") == 0) {
-            fd = open(root->right->command, O_RDONLY);
-            if (fd == -1) {
-                perror("open for reading execute command error");
-                
-            }
-            if (fork() == 0) {
-                dup2(fd, STDIN_FILENO);
-                close(fd);
-                execute_command(root->left);
-                exit(1);
-            } else {
-                wait(NULL);
-                close(fd);
-            }
-        }
+
+    return 0;
 }
-}
+
 
 
 int execute_tree(node* root) {
     if (root == NULL) return 0;
 
-    if(root->type == BACKGROUND){
-        pid_t pid = fork();
-        if(pid == 0){
-            execute_tree(root->left);
-            exit(0);
-        } else if(pid > 0){
-            push_job(jobs, pid, root->left->command);
-            return 0;
-        } else {
-            perror("fork error in execute tree for background");
-            return -1;
-        }
-        
-    }
-
     if (root->type == LOGIC) {
-    int left_stat = execute_tree(root->left);
-        if (!strcmp(root->op, "&&")) {
-            if (left_stat == 0) {
-                 execute_tree(root->right);
-        } 
-        else {
-            return left_stat;
+        if (root->left == NULL) return -1;  // обработка ошибки
+        int left_stat = execute_tree(root->left);
+
+        if (root->op != NULL) {
+            if (!strcmp(root->op, "&&")) {
+                if (left_stat == 0) {
+                    if (root->right != NULL) {
+                        return execute_tree(root->right);
+                    }
+                } else {
+                    return left_stat;
+                }
+            } else if (!strcmp(root->op, "||")) {
+                if (left_stat != 0) {
+                    if (root->right != NULL) {
+                        return execute_tree(root->right);
+                    }
+                } else {
+                    return left_stat;
+                }
+            } else if (!strcmp(root->op, ";")) {
+                if (root->right != NULL) {
+                    return execute_tree(root->right);
+                }
+            }
         }
-    }   else if (!strcmp(root->op, "||")) {
-            if (left_stat != 0) {
-                execute_tree(root->right);
-      }  else {
-        return left_stat;
-      }
-    } else if (!strcmp(root->op, ";")) {
-        execute_tree(root->right);
-    }
     } else if (root->type == REDIRECT) {
         execute_command(root);
     } else if (root->type == OPERATION) {
@@ -487,10 +478,9 @@ int execute_tree(node* root) {
     } else if (root->type == PIPE) {
         execute_pipe(root);
     }
+
+    return 0;
 }
-
-
-
 
 
 int is_single_operator(char c) {
