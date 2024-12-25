@@ -118,16 +118,6 @@ void print_prompt() {
 
 
 void handle_signal(int sig) {
-    if (sig == SIGINT) {
-        printf("\n ignore SIGINT (Ctrl+C)\n");
-       
-    } else if (sig == SIGTSTP) {
-        printf("\nignore SIGTSTP (Ctrl+Z)\n");
-        
-    } else if (sig == SIGQUIT) {
-        printf("\nignore SIGQUIT (Ctrl+\\)\n");
-       
-    }
     fflush(stdout);
 }
 
@@ -358,7 +348,7 @@ int execute_pipe(node* root){
 
 int execute_command(node* root) {
     if (root == NULL) {
-        fprintf(stderr, "Ошибка: root равен NULL\n");
+        fprintf(stderr, "root == null/n");
         return -1;
     }
 
@@ -392,7 +382,7 @@ int execute_command(node* root) {
 
         if (strcmp(args[0], "kill") == 0) {
             if (args[1] == NULL) {
-                fprintf(stderr, "ошибка: укажите PID для команды kill\n");
+                fprintf(stderr, "kill error no pid\n");
                 return -1;
             }
                 pid_t pid = atoi(args[1]);
@@ -400,6 +390,19 @@ int execute_command(node* root) {
                 delete_job(&jobs, pid);
                 return 0;
         }
+
+    if (strcmp(args[0], "fg") == 0) {
+        pid_t pid = atoi(args[1]);  
+        if (pid > 0) {
+            kill(pid, SIGCONT);        
+            int status;
+            waitpid(pid, &status, 0);
+            delete_job(&jobs, pid);
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }         // проверяет завершился ли нормально процесс /  извлекает код возврата завершившегося процесса из переменной / -1 в другом случае
+        return -1; 
+    }
+
 
         
 
@@ -445,7 +448,7 @@ int execute_tree(node* root) {
     if (root == NULL) return 0;
 
     if (root->type == LOGIC) {
-        if (root->left == NULL) return -1;  // обработка ошибки
+        if (root->left == NULL) return -1;  
         int left_stat = execute_tree(root->left);
 
         if (root->op != NULL) {
