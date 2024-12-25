@@ -91,10 +91,10 @@ int delete_job(job** jobs, pid_t pid) {
 }
 
 void print_jobs(job* jobs){
-  printf("PID | NAME \n");
-  while (jobs != NULL){
-    printf("%d | %s \n", jobs->pid, jobs -> command);
-    jobs = jobs -> next;
+    printf("PID | NAME \n");
+    while (jobs != NULL){
+        printf("%d | %s \n", jobs->pid, jobs -> command);
+        jobs = jobs -> next;
   }
   return;
 }
@@ -118,6 +118,7 @@ void print_prompt() {
 
 
 void handle_signal(int sig) {
+    printf("signal ignored");
     fflush(stdout);
 }
 
@@ -437,10 +438,60 @@ int execute_command(node* root) {
                 }
             }
         }
-    }
-
-    return 0;
+    
+     } else if (root->type == REDIRECT) {
+        int fd;
+        if (strcmp(root->op, ">") == 0) {
+            fd = open(root->right->command, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd == -1) {
+                perror("open for writing execute command error");
+                
+            }
+            if (fork() == 0) {
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+                execute_command(root->left);
+                exit(1);
+            } else {
+                wait(NULL);
+                close(fd);
+            }
+        } else if (strcmp(root->op, ">>") == 0) {
+            fd = open(root->right->command, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd == -1) {
+                perror("open for adding execute command error");
+                
+            }
+            if (fork() == 0) {
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+                execute_command(root->left);
+                exit(1);
+            } else {
+                wait(NULL);
+                close(fd);
+            }
+        } else if (strcmp(root->op, "<") == 0) {
+            fd = open(root->right->command, O_RDONLY);
+            if (fd == -1) {
+                perror("open for reading execute command error");
+                
+            }
+            if (fork() == 0) {
+                dup2(fd, STDIN_FILENO);
+                close(fd);
+                execute_command(root->left);
+                exit(1);
+            } else {
+                wait(NULL);
+                close(fd);
+            }
+        }
 }
+
+
+}
+    
 
 
 
@@ -448,38 +499,30 @@ int execute_tree(node* root) {
     if (root == NULL) return 0;
 
     if (root->type == LOGIC) {
-        if (root->left == NULL) return -1;  
         int left_stat = execute_tree(root->left);
-
-        if (root->op != NULL) {
-            if (!strcmp(root->op, "&&")) {
-                if (left_stat == 0) {
-                    if (root->right != NULL) {
-                        return execute_tree(root->right);
-                    }
-                } else {
-                    return left_stat;
-                }
-            } else if (!strcmp(root->op, "||")) {
-                if (left_stat != 0) {
-                    if (root->right != NULL) {
-                        return execute_tree(root->right);
-                    }
-                } else {
-                    return left_stat;
-                }
-            } else if (!strcmp(root->op, ";")) {
-                if (root->right != NULL) {
-                    return execute_tree(root->right);
-                }
+        
+        if (!strcmp(root->op, "&&")) {
+            if (left_stat == 0) {
+                return execute_tree(root->right);
+            } else {
+                return left_stat; 
             }
+        } else if (!strcmp(root->op, "||")) {
+            if (left_stat != 0) { 
+                return execute_tree(root->right);
+            } else {    
+                return left_stat;
+            }
+        } else if (!strcmp(root->op, ";")) {
+            execute_tree(root->right); 
+         
         }
     } else if (root->type == REDIRECT) {
-        execute_command(root);
+        return execute_command(root);
     } else if (root->type == OPERATION) {
-        execute_command(root);
+        return execute_command(root);
     } else if (root->type == PIPE) {
-        execute_pipe(root);
+        return execute_pipe(root);
     }
 
     return 0;
