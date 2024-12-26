@@ -60,35 +60,34 @@ int push_job(job** jobs, pid_t pid, const char* command) {
 
 
 job* jobs = NULL;
+job* last_background_job = NULL;
 
-int delete_job(job** jobs, pid_t pid) {
-    if (*jobs == NULL) {
-        return -1;  
-    }
-
-    job* head = *jobs;
-    job* tmp = *jobs;
+void delete_job(job** jobs, pid_t pid) {
+    job* current = *jobs;
     job* prev = NULL;
-
-    
-    while (tmp != NULL && tmp->pid != pid) {
-        prev = tmp;
-        tmp = tmp->next;
+    while (current != NULL && current->pid != pid) {
+        prev = current;
+        current = current->next;
     }
 
-    if (tmp == NULL) {
-        return -1;
+    if (current == NULL) {
+        return;  
     }
 
-    if (tmp == head) {
-        *jobs = head->next;
+   
+    if (current == *jobs) {
+        *jobs = current->next;
     } else {
-        prev->next = tmp->next;
+        prev->next = current->next;
     }
 
-    free(tmp);
-    return 0;
+    if (current == last_background_job) {
+        last_background_job = NULL; 
+    }
+
+    free(current);
 }
+
 
 void print_jobs(job* jobs){
     printf("PID | NAME \n");
@@ -96,7 +95,14 @@ void print_jobs(job* jobs){
         printf("%d | %s \n", jobs->pid, jobs -> command);
         jobs = jobs -> next;
   }
-  return;
+}
+
+job* get_last_job() {
+    job* current = jobs;
+    while (current != NULL && current->next != NULL) {
+        current = current->next;
+    }
+    return current;
 }
 
 
@@ -115,10 +121,10 @@ void print_prompt() {
 }   
 
 
-
+ 
 
 void handle_signal(int sig) {
-    printf("signal ignored");
+    printf("signal ignored\n");
     fflush(stdout);
 }
 
@@ -393,7 +399,8 @@ int execute_command(node* root) {
         }
 
     if (strcmp(args[0], "fg") == 0) {
-        pid_t pid = atoi(args[1]);  
+        job* job  = get_last_job();
+        pid_t pid = job -> pid;  
         if (pid > 0) {
             kill(pid, SIGCONT);        
             int status;
@@ -678,7 +685,7 @@ int main() {
     while (1) {
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            printf("\033[01;35mshell: \033[0m\033[01;37m%s\033[0m$ ", cwd); 
+            printf("\e[1;32mshell: \033[0m\033[01;37m%s\033[0m$ ", cwd); 
         } else {
             perror("getcwd() error"); 
             continue; 
